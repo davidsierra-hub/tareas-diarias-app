@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tareas del día</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f3;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    #root { width: 100%; max-width: 520px; }
+    input[type="text"], input[type="date"], select {
+      outline: none;
+      font-family: inherit;
+    }
+    input[type="text"]:focus, input[type="date"]:focus {
+      border-color: #378ADD !important;
+      box-shadow: 0 0 0 3px rgba(55,138,221,0.15);
+    }
+    input[type="checkbox"] { cursor: pointer; accent-color: #378ADD; }
+    button { font-family: inherit; cursor: pointer; }
+    button:hover { opacity: 0.85; }
+    .date-label {
+      cursor: pointer;
+      padding: 4px 10px;
+      border-radius: 6px;
+      transition: background 0.15s;
+      user-select: none;
+    }
+    .date-label:hover { background: #f0f0ec; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const PRIORITIES = {
+  alta:  { label: "Alta",  bg: "#FAECE7", text: "#993C1D", border: "#F0997B" },
+  media: { label: "Media", bg: "#FAEEDA", text: "#854F0B", border: "#FAC775" },
+  baja:  { label: "Baja",  bg: "#E6F1FB", text: "#185FA5", border: "#85B7EB" },
+};
+
+const DAILY_BG     = "#FAF7FC";
+const DAILY_TEXT   = "#7B5BA8";
+const DAILY_BORDER = "#DDD0EF";
+
+const dateKey = (d) => d.toISOString().slice(0, 10);
+const fmt = (d) => d.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
+
+const loadTasks = () => {
+  try { return JSON.parse(localStorage.getItem("daily_tasks_v2") || "{}"); } catch { return {}; }
+};
+const saveTasks = (t) => {
+  try { localStorage.setItem("daily_tasks_v2", JSON.stringify(t)); } catch {}
+};
+
+// Roll over de tareas pendientes de días anteriores a hoy.
+// IMPORTANTE: las tareas pendientes quedan MARCADAS como 'rolledOver' en su día original
+// (cuentan como NO completadas en el % de ese día) y se COPIAN al día actual
+// con el marcador 'rolledFrom' para identificarlas como arrastradas.
+const rolloverPending = (tasks) => {
+  const now = new Date();
+  const todayKey = dateKey(now);
+  const updated = { ...tasks };
+  Object.keys(updated).forEach(k => {
+    if (k >= todayKey) return;
+    const arr = updated[k] || [];
+    const pending = arr.filter(t => !t.done && !t.rolledOver && !t.isDaily);
+    if (!pending.length) return;
+    updated[k] = arr.map(t => {
+      if (!t.done && !t.rolledOver && !t.isDaily) {
+        return { ...t, rolledOver: true };
+      }
+      return t;
+    });
+    const carried = pending.map(t => ({
+      ...t,
+      id: Date.now() + Math.random(),
+      rolledFrom: t.rolledFrom || k,
+      rolledOver: false,
+    }));
+    updated[todayKey] = [...(updated[todayKey] || []), ...carried];
+  });
+  return updated;
+};
+
+function App() {
+  const [current, setCurrent]   = useState(new Date());
+  const [tasks, setTasks]       = useState(() => rolloverPending(loadTasks()));
+  const [input, setInput]       = useState("");
+  const [priority, setPriority] = useState("media");
+  const [subInput, setSubInput] = useState("");
+  const rolloverDone = useRef(false);
+  const dateInputRef = useRef(null);
+
+  useEffect(() => { saveTasks(tasks); }, [tasks]);
+
+  // Crear automáticamente una tarea "Daily" para cada día actual o futuro visitado.
+  useEffect(() => {
+    const k = dateKey(current);
+    const todayKey = dateKey(new Date());
+    if (k < todayKey) return;
+    setTasks(t => {
+      const arr = t[k] || [];
+      if (arr.some(x => x.isDaily)) return t;
+      return {
+        ...t,
+        [k]: [...arr, {
+          id: Date.now() + Math.random(),
+          text: "Daily",
+          isDaily: true,
+          subtasks: [],
+        }],
+      };
+    });
+  }, [current]);
+
+  // Rollover de las 6 PM: pendientes del día actual se mueven a mañana,
+  // quedando marcadas como rolledOver en el día actual (para el % real).
+  useEffect(() => {
+    if (rolloverDone.current) return;
+    rolloverDone.current = true;
+    const now = new Date();
+    const todayKey = dateKey(now);
+    const ms6pm = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 18, 0, 0) - now;
+    const delay = ms6pm > 0 ? ms6pm : 0;
+    const timer = setTimeout(() => {
+      setTasks(prev => {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowKey = dateKey(tomorrow);
+        const updated = { ...prev };
+        const arr = updated[todayKey] || [];
+        const pending = arr.filter(t => !t.done && !t.rolledOver && !t.isDaily);
+        if (!pending.length) return prev;
+        updated[todayKey] = arr.map(t => {
+          if (!t.done && !t.rolledOver && !t.isDaily) {
+            return { ...t, rolledOver: true };
+          }
+          return t;
+        });
+        const carried = pending.map(t => ({
+          ...t,
+          id: Date.now() + Math.random(),
+          rolledFrom: t.rolledFrom || todayKey,
+          rolledOver: false,
+        }));
+        updated[tomorrowKey] = [...(updated[tomorrowKey] || []), ...carried];
+        return updated;
+      });
+    }, delay);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const key = dateKey(current);
+  const ORDER = { alta: 0, media: 1, baja: 2 };
+
+  // Orden: pendientes (por prioridad) → completadas/vencidas (por prioridad) → Daily al final.
+  const dayTasks = (tasks[key] || []).slice().sort((a, b) => {
+    if (a.isDaily && !b.isDaily) return 1;
+    if (!a.isDaily && b.isDaily) return -1;
+    if (a.isDaily && b.isDaily) return 0;
+    const aBacklog = a.done || a.rolledOver;
+    const bBacklog = b.done || b.rolledOver;
+    if (aBacklog !== bBacklog) return aBacklog ? 1 : -1;
+    return ORDER[a.priority] - ORDER[b.priority];
+  });
+
+  // El cálculo de % EXCLUYE la Daily (no se cuenta).
+  // Las rolledOver SÍ cuentan en el total pero NO en done → % refleja cumplimiento real.
+  const countable = dayTasks.filter(t => !t.isDaily);
+  const done  = countable.filter(t => t.done).length;
+  const total = countable.length;
+  const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+  const isToday = dateKey(new Date()) === key;
+
+  const addTask = () => {
+    if (!input.trim()) return;
+    setTasks(t => ({
+      ...t,
+      [key]: [...(t[key] || []), { id: Date.now(), text: input.trim(), priority, done: false }],
+    }));
+    setInput("");
+  };
+  const toggle = (id) => setTasks(t => ({
+    ...t,
+    [key]: t[key].map(tk => tk.id === id ? { ...tk, done: !tk.done } : tk),
+  }));
+  const remove = (id) => setTasks(t => ({
+    ...t,
+    [key]: t[key].filter(tk => tk.id !== id),
+  }));
+  const changeDay = (n) => {
+    const d = new Date(current);
+    d.setDate(d.getDate() + n);
+    setCurrent(d);
+  };
+
+  // Date picker — al click en el label de fecha, abre el picker nativo.
+  const openDatePicker = () => {
+    try {
+      if (dateInputRef.current && dateInputRef.current.showPicker) {
+        dateInputRef.current.showPicker();
+      } else if (dateInputRef.current) {
+        dateInputRef.current.click();
+        dateInputRef.current.focus();
+      }
+    } catch (e) {}
+  };
+  const onDateChange = (e) => {
+    if (!e.target.value) return;
+    const [y, m, d] = e.target.value.split('-').map(Number);
+    setCurrent(new Date(y, m - 1, d, 12, 0, 0));
+  };
+
+  // Helpers Daily subtasks
+  const addSubtask = (dailyId) => {
+    if (!subInput.trim()) return;
+    setTasks(t => ({
+      ...t,
+      [key]: t[key].map(tk => tk.id === dailyId
+        ? { ...tk, subtasks: [...(tk.subtasks || []), { id: Date.now() + Math.random(), text: subInput.trim(), done: false }] }
+        : tk),
+    }));
+    setSubInput("");
+  };
+  const toggleSubtask = (dailyId, subId) => setTasks(t => ({
+    ...t,
+    [key]: t[key].map(tk => tk.id === dailyId
+      ? { ...tk, subtasks: tk.subtasks.map(s => s.id === subId ? { ...s, done: !s.done } : s) }
+      : tk),
+  }));
+  const removeSubtask = (dailyId, subId) => setTasks(t => ({
+    ...t,
+    [key]: t[key].map(tk => tk.id === dailyId
+      ? { ...tk, subtasks: (tk.subtasks || []).filter(s => s.id !== subId) }
+      : tk),
+  }));
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 16, border: "0.5px solid #e0dfd8", padding: "1.5rem 1.25rem" }}>
+      {/* Navegación */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem" }}>
+        <button onClick={() => changeDay(-1)} style={{ background: "none", border: "0.5px solid #c8c7c0", borderRadius: 8, padding: "6px 12px", fontSize: 13, color: "#666" }}>← Ant.</button>
+        <div style={{ textAlign: "center", position: "relative" }}>
+          <div className="date-label" onClick={openDatePicker} title="Click para ir a una fecha específica" style={{ fontSize: 15, fontWeight: 500, textTransform: "capitalize", color: "#1a1a18" }}>
+            {fmt(current)}
+          </div>
+          <input
+            ref={dateInputRef}
+            type="date"
+            value={key}
+            onChange={onDateChange}
+            style={{ position: "absolute", left: "50%", top: "100%", opacity: 0, pointerEvents: "none", width: 1, height: 1 }}
+          />
+          {isToday && <span style={{ fontSize: 11, background: "#E6F1FB", color: "#185FA5", padding: "2px 8px", borderRadius: 20, marginTop: 4, display: "inline-block" }}>hoy</span>}
+        </div>
+        <button onClick={() => changeDay(1)} style={{ background: "none", border: "0.5px solid #c8c7c0", borderRadius: 8, padding: "6px 12px", fontSize: 13, color: "#666" }}>Sig. →</button>
+      </div>
+
+      {/* Métricas */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: "1.25rem" }}>
+        {[{ label: "Total", value: total }, { label: "Completadas", value: done }, { label: "Progreso", value: `${pct}%` }].map(m => (
+          <div key={m.label} style={{ background: "#f5f5f3", borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>{m.label}</div>
+            <div style={{ fontSize: 22, fontWeight: 500, color: "#1a1a18" }}>{m.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Barra progreso */}
+      {total > 0 && (
+        <div style={{ height: 4, background: "#e8e7e0", borderRadius: 99, marginBottom: "1.25rem" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: "#378ADD", borderRadius: 99, transition: "width 0.3s" }} />
+        </div>
+      )}
+
+      {/* Añadir tarea */}
+      <div style={{ display: "flex", gap: 8, marginBottom: "1.5rem", flexWrap: "wrap" }}>
+        <input
+          type="text"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && addTask()}
+          placeholder="Nueva tarea..."
+          style={{ flex: 1, minWidth: 160, padding: "8px 12px", borderRadius: 8, border: "0.5px solid #c8c7c0", fontSize: 14, color: "#1a1a18", background: "#fff" }}
+        />
+        <select
+          value={priority}
+          onChange={e => setPriority(e.target.value)}
+          style={{ padding: "8px 10px", borderRadius: 8, border: `0.5px solid ${PRIORITIES[priority].border}`, background: PRIORITIES[priority].bg, color: PRIORITIES[priority].text, fontSize: 13, fontWeight: 500 }}
+        >
+          {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <button onClick={addTask} style={{ padding: "8px 16px", borderRadius: 8, border: "0.5px solid #c8c7c0", background: "#f5f5f3", color: "#1a1a18", fontSize: 14 }}>
+          Agregar
+        </button>
+      </div>
+
+      {/* Lista */}
+      {dayTasks.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "2.5rem 0", color: "#aaa", fontSize: 14 }}>No hay tareas para este día.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {dayTasks.map(tk => {
+            // ---------- DAILY ITEM ----------
+            if (tk.isDaily) {
+              const subs = tk.subtasks || [];
+              const subDone = subs.filter(s => s.done).length;
+              const subTotal = subs.length;
+              return (
+                <div key={tk.id} style={{ borderRadius: 12, border: `1px solid ${DAILY_BORDER}`, background: DAILY_BG, padding: "12px 14px", marginTop: 4 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: subs.length ? 10 : 8 }}>
+                    <span style={{ fontSize: 14, color: DAILY_TEXT, fontWeight: 600, flex: 1 }}>
+                      Daily
+                    </span>
+                    {subTotal > 0 && (
+                      <span style={{ fontSize: 11, color: DAILY_TEXT, fontWeight: 500, background: "rgba(255,255,255,0.7)", padding: "2px 8px", borderRadius: 20 }}>
+                        {subDone}/{subTotal} temas
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Lista de subtasks */}
+                  {subs.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10, paddingLeft: 2 }}>
+                      {subs.map(s => (
+                        <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", borderRadius: 8, background: "rgba(255,255,255,0.7)" }}>
+                          <input type="checkbox" checked={!!s.done} onChange={() => toggleSubtask(tk.id, s.id)} style={{ width: 14, height: 14, flexShrink: 0 }} />
+                          <span style={{ flex: 1, fontSize: 13, color: DAILY_TEXT, textDecoration: s.done ? "line-through" : "none", opacity: s.done ? 0.6 : 1, wordBreak: "break-word" }}>{s.text}</span>
+                          <button onClick={() => removeSubtask(tk.id, s.id)} style={{ background: "none", border: "none", color: DAILY_TEXT, opacity: 0.4, fontSize: 15, lineHeight: 1, padding: "0 4px" }} title="Eliminar tema">×</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Input para nuevo tema */}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      type="text"
+                      value={subInput}
+                      onChange={e => setSubInput(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && addSubtask(tk.id)}
+                      placeholder="Agregar tema a tratar..."
+                      style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: `0.5px solid ${DAILY_BORDER}`, fontSize: 13, background: "#fff", color: "#1a1a18" }}
+                    />
+                    <button onClick={() => addSubtask(tk.id)} style={{ padding: "6px 12px", borderRadius: 6, border: `0.5px solid ${DAILY_BORDER}`, background: "#fff", color: DAILY_TEXT, fontSize: 13, fontWeight: 500 }}>
+                      Agregar
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            // ---------- TAREA NORMAL ----------
+            const p = PRIORITIES[tk.priority];
+            const isVencida = tk.rolledOver;
+            return (
+              <div
+                key={tk.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  border: isVencida ? "0.5px dashed #d1a98e" : "0.5px solid #e0dfd8",
+                  background: isVencida ? "#FFF7F2" : "#fff",
+                  opacity: (tk.done || isVencida) ? 0.6 : 1,
+                  transition: "opacity 0.2s",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!tk.done}
+                  disabled={isVencida}
+                  onChange={() => toggle(tk.id)}
+                  style={{ width: 16, height: 16, flexShrink: 0 }}
+                  title={isVencida ? "Esta tarea ya fue movida al día siguiente" : ""}
+                />
+                <span style={{ flex: 1, fontSize: 14, color: "#1a1a18", textDecoration: tk.done ? "line-through" : "none", wordBreak: "break-word" }}>{tk.text}</span>
+                {isVencida && <span title="Movida al día siguiente — quedó sin completar este día" style={{ fontSize: 10, color: "#b07b5f", fontWeight: 600, flexShrink: 0, letterSpacing: 0.3 }}>VENCIDA</span>}
+                {tk.rolledFrom && !isVencida && <span title={`Arrastrada desde el ${tk.rolledFrom}`} style={{ fontSize: 10, color: "#aaa", flexShrink: 0 }}>↩</span>}
+                <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 20, background: p.bg, color: p.text, border: `0.5px solid ${p.border}`, fontWeight: 500, flexShrink: 0 }}>{p.label}</span>
+                <button onClick={() => remove(tk.id)} style={{ background: "none", border: "none", color: "#bbb", fontSize: 18, lineHeight: 1, padding: "0 2px", flexShrink: 0 }} title="Eliminar">×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
