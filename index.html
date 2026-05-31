@@ -164,16 +164,22 @@ function App() {
 
   const key = dateKey(current);
   const ORDER = { alta: 0, media: 1, baja: 2 };
+  const priVal = (t) => (ORDER[t.priority] ?? 99);
 
-  // Orden: pendientes (por prioridad) → completadas/vencidas (por prioridad) → Daily al final.
+  // Orden:
+  //   1. Pendientes arriba, completadas/vencidas abajo
+  //   2. Dentro de cada grupo: Alta → Media → Baja
+  //   3. Daily siempre al final
   const dayTasks = (tasks[key] || []).slice().sort((a, b) => {
-    if (a.isDaily && !b.isDaily) return 1;
-    if (!a.isDaily && b.isDaily) return -1;
-    if (a.isDaily && b.isDaily) return 0;
-    const aBacklog = a.done || a.rolledOver;
-    const bBacklog = b.done || b.rolledOver;
+    // Daily al final
+    if (!!a.isDaily !== !!b.isDaily) return a.isDaily ? 1 : -1;
+    if (a.isDaily) return 0;
+    // Pendientes antes de completadas/vencidas
+    const aBacklog = !!(a.done || a.rolledOver);
+    const bBacklog = !!(b.done || b.rolledOver);
     if (aBacklog !== bBacklog) return aBacklog ? 1 : -1;
-    return ORDER[a.priority] - ORDER[b.priority];
+    // Por prioridad: Alta (0) → Media (1) → Baja (2)
+    return priVal(a) - priVal(b);
   });
 
   // El cálculo de % EXCLUYE la Daily (no se cuenta).
